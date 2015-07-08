@@ -58,4 +58,4 @@ I prefer British date notatation (dd/mm/yyyy) but this can be easily modified by
 In December 2010, for example, your work mile was 7715 base miles
 plus 2276 bonus miles. On 31 May 2012, the bonus miles of 588 miles which had been
 earned on the 16 May 2009 flight expired but the base miles earned on the same flight
-had been redeemed on 6 Aug 2010 such that they die not expire.
+had been redeemed on 6 Aug 2010 such that they did not expire.
