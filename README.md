@@ -18,8 +18,6 @@ If certain amount of mileage was redeemed for a business trip, that mileage can 
 
 A beauty of this code is to keep track of expired mileage. The rule typical in Japanese airlines is followed where mileage expires at the end of the 36th month.
 
-I prefer British date notatation (dd/mm/yyyy) but this can be easily modified by `simpleDateFormat`.
-
 ## Output
 
 	% ./WorkMileageCounter.hs

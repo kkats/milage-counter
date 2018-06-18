@@ -6,19 +6,18 @@
 import Control.Monad             (forM_)
 import Control.Monad.Trans.State (StateT, get, put, runStateT)
 import Control.Monad.Trans.Class (lift)
-import qualified Data.ByteString.Char8 as B
 import Data.Char                 (isDigit)
 import Data.Function             (on)
 import Data.List                 (isPrefixOf, findIndices, sort, nub, sortBy)
-import Data.UnixTime
+import Data.Time.Calendar
 import Text.Printf               (printf)
 
 -- This is a chunk of miles earned on a flight
-data Flight = Flight { getDate    :: UnixTime, -- ^ flight date
+data Flight = Flight { getDate    :: Day, -- ^ flight date
                        getBase    :: Integer,  -- ^ base miles
                        getBonus   :: Integer,  -- ^ bonus miles
                        getRemark  :: String,   -- ^ remark
-                       expDate    :: UnixTime, -- ^ expiry date
+                       expDate    :: Day, -- ^ expiry date
                        getID      :: Integer   -- ^ unique ID is necessary
                      }
 --
@@ -26,30 +25,30 @@ data Flight = Flight { getDate    :: UnixTime, -- ^ flight date
 -- Redeeming will use the oldest but not expired miles
 -- We use only the base miles and leave the bonus miles intact.
 --
-            | Redeem { getDate  :: UnixTime, -- ^ redeem date
+            | Redeem { getDate  :: Day, -- ^ redeem date
                        getBase  :: Integer,  -- ^ base miles
                        getID    :: Integer   -- ^ unique ID (really necessary?)
                      }
 
 printFlight :: Flight -> IO ()
 printFlight f = case f of
-    Flight date base bonus remark expiry i -> do
-                date' <- formatUnixTime simpleDateFormat date
-                expiry' <- formatUnixTime simpleDateFormat expiry
-                printf "[%4d] %s              %8d (%6d) %s (expiry %s)\n"
-                        i (B.unpack date') base bonus remark (B.unpack expiry')
-    Redeem date base _                     -> do
-                date' <- formatUnixTime simpleDateFormat date
-                printf "REDEEM %s              %8d\n" (B.unpack date') (-base)
+    Flight date base bonus remark expiry i ->
+                let date'   = showGregorian date
+                    expiry' = showGregorian expiry
+                 in printf "[%4d] %s              %8d (%6d) %s (expiry %s)\n"
+                        i date' base bonus remark expiry'
+    Redeem date base _                     ->
+                let date' = showGregorian date
+                 in printf "REDEEM %s              %8d\n" date' (-base)
 printExpire :: Flight -> IO ()
 printExpire f = case f of
     Flight date base bonus _ expiry i -> do
-                date' <- formatUnixTime simpleDateFormat date
-                expiry' <- formatUnixTime simpleDateFormat expiry
+                let date' = showGregorian date
+                    expiry' = showGregorian expiry
                 if base == 0 && bonus == 0
                   then return ()
                   else printf "EXPIRE %s              %8d (%6d) flight [%d] (%s)\n"
-                          (B.unpack expiry') (-base) (-bonus) i (B.unpack date')
+                          expiry' (-base) (-bonus) i date'
     _ -> return ()
 
 addID :: [Flight] -> [Flight]
@@ -61,52 +60,44 @@ addID fs' = addID' fs' [] 0
                 Flight d ba bo r e _ -> addID' fs ((Flight d ba bo r e (c+1)):out) (c+1)
                 Redeem d ba _        -> addID' fs ((Redeem d ba (c+1)):out)        (c+1)
 
-oneDay :: UnixDiffTime
-oneDay = secondsToUnixDiffTime (24 * 60 * 60::Integer)
-
-simpleDateFormat :: Format
-simpleDateFormat = "%d/%m/%Y"
-
-parser :: String -> IO Flight
+parser :: String -> Flight
 parser l = let ww     = words (dropWhile (not . isDigit) l)
                date   = head ww
                ss     = findIndices (== '/') date
-               now    = parseUnixTime simpleDateFormat (B.pack date)
                f      = read :: String -> Integer
+               f'     = read :: String -> Int
                base   = f $ ww !! 1
                bonus  = f $ ww !! 2
                remark = unwords $ drop 3 ww
             in if length ss /= 2  -- minimum format check
                  then error $ "inconsistent date field: " ++ date
-                 else if base < 0 -- redeeming
-                        then return $ Redeem now (-base) 0
-                        else expireDate now >>= \e ->
-                             return $ Flight now base bonus remark e 0
+                 else let (d0, r0) = span (/= '/') date
+                          r1       = tail r0
+                          (m0, r2) = span (/= '/') r1
+                          y0       = tail r2
+                          now      = fromGregorian (f y0) (f' m0) (f' d0)
+                       in if base < 0 -- redeeming
+                            then Redeem now (-base) 0
+                            else Flight now base bonus remark (expireDate now) 0
 
 -- find last day of month by stepping back one day
 -- from the 1st day of the next month
-expireDate :: UnixTime -> IO UnixTime
-expireDate from = do from' <- formatUnixTime simpleDateFormat from
-                     let ww       = B.splitWith (== '/') from'
-                         f        = read . B.unpack :: B.ByteString -> Int
-                         (m, y)   = (f $ ww !! 1, f $ ww !! 2)
-                         (y', m') = if m + 1 >= 13 then (y + 4, 1)
-                                                   else (y + 3, m + 1)
-                         exp' = parseUnixTime simpleDateFormat $ "01/" `B.append`
-                                    (B.pack . show $ m') `B.append` "/" `B.append`
-                                    (B.pack . show $ y')
-                     return $ addUnixDiffTime exp' ((-1) * oneDay)
-
+-- "マイルはご搭乗日の 36 か月後の月末まで有効"
+expireDate :: Day -> Day
+expireDate from = let (y, m, d)  = toGregorian from
+                      d'         = gregorianMonthLength y m
+                      endOfmonth = fromGregorian y m d'
+                   in addGregorianMonthsClip 36 endOfmonth
 --
 -- walk through the flights with keeping track of the state of flights and miles
 --
 type MileStatus = ([Flight], Integer, Integer) -- ^ (flights, baseMile, bonusMile)
 
-isAlive :: UnixTime -> Flight -> Bool
+isAlive :: Day -> Flight -> Bool
 isAlive _     (Redeem _ _ _)                          = False
 isAlive today (Flight date base _ _ expiry _) = date < today && today < expiry
                                                         && base > 0
-countMiles :: UnixTime -> StateT MileStatus IO ()
+countMiles :: Day -> StateT MileStatus IO ()
 countMiles today = do
     (flights, base, bonus) <- get
 
@@ -164,9 +155,8 @@ countMiles today = do
 main :: IO ()
 main = do
     c <- readFile "WorkMileageCounter.hs"
-    flights' <- mapM parser . filter (isPrefixOf "---") . lines $ c
-
-    let flights = addID flights'
+    let flights' = map parser . filter (isPrefixOf "---") . lines $ c
+        flights = addID flights'
         dates   = sort $ nub $ concat $ map (\f -> case f of
                                              Flight d _ _ _ e _ -> [d, e]
                                              Redeem d _ _       -> [d]) flights
